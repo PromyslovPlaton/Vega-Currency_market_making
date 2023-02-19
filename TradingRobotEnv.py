@@ -45,7 +45,7 @@ const_r = 0.3 # константа для риска, r > 0
 currency_pair = ['BTC/USD'] # рассматриваемая валютная пара
 order_size = 1000 # размер заявки, который мы можем выставить
 
-class TradingRobotEnv(gym.Env):
+class MarketMake(gym.Env):
     metadata = {
         'render.modes': ['robot', 'rgb_array'],
         'video.frames_per_second': 1
@@ -78,29 +78,27 @@ class TradingRobotEnv(gym.Env):
 
     def __init__(self, goal_velocity=0):
         # если True то вывод подробней для отладки
-        # self.verbose = False
-        self.verbose = True
+        self.verbose = False
+        # self.verbose = True
         self.viewer = None
         self.time = total_time
 
-        self.action_space = Dict({'Bid_Ask': MultiBinary(2), 'Level_BA': Box(low_level, high_level, shape=(2,))})
+        self.action_space = spaces.Dict({'Bid_Ask': spaces.MultiBinary(2), 'Level_BA': spaces.Box(0.0, 1e6, shape=(2,))})
         self.observation_space = spaces.Box(
             low=0.0,
             high=1e12,
-            shape=(TradingRobotEnv.STATE_ELEMENTS,),
+            shape=(MarketMake.STATE_ELEMENTS,),
             dtype=np.float32
         )
 
         self.reset()
 
         self.state_log = []
-        self.state_ProfitTime = []
 
         self.seed()
         self.reset()
 
-        # пустой журнал нужен для отладки,
-        # действительно ли наша модель делает то
+        # пустой журнал для отладки
         self.state_log = []
 
     def seed(self, seed=None):
@@ -110,11 +108,11 @@ class TradingRobotEnv(gym.Env):
     # функция подсчета капитала
     def _calc_net_worth(self):
         # Кол-во валюты в корзине
-        num_usd = float(self.state[TradingRobotEnv.STATE_OUR_USD])
-        num_btc = float(self.state[TradingRobotEnv.STATE_OUR_BTC])
+        num_usd = float(self.state[MarketMake.STATE_OUR_USD])
+        num_btc = float(self.state[MarketMake.STATE_OUR_BTC])
         # Курс обмена
-        course = (float(self.state[TradingRobotEnv.STATE_MARKET_ASK]) + \
-                 float(self.state[TradingRobotEnv.STATE_MARKET_BID]))/2
+        course = (float(self.state[MarketMake.STATE_MARKET_ASK]) + \
+                 float(self.state[MarketMake.STATE_MARKET_BID]))/2
         # Стоимость корзины
         worth = num_usd + num_btc * course
         return worth
@@ -142,8 +140,8 @@ class TradingRobotEnv(gym.Env):
         our_bid_level = level_bid  # уровень bid
         our_ask_level = level_ask  # уровень ask
         order_size = self.ORDER_SIZE
-        market_bid = float(self.state[TradingRobotEnv.STATE_MARKET_BID])
-        market_ask = float(self.state[TradingRobotEnv.STATE_MARKET_ASK])
+        market_bid = float(self.state[MarketMake.STATE_MARKET_BID])
+        market_ask = float(self.state[MarketMake.STATE_MARKET_ASK])
         mid = (market_ask + market_bid)/2
 
         # Ask type for execution_prob = -1
@@ -158,7 +156,7 @@ class TradingRobotEnv(gym.Env):
 
     # |Q|
     def _risk_function(self):
-        num_btc = float(self.state[TradingRobotEnv.STATE_OUR_BTC])
+        num_btc = float(self.state[MarketMake.STATE_OUR_BTC])
         return num_btc
 
     # F
@@ -167,12 +165,13 @@ class TradingRobotEnv(gym.Env):
         F = self._PnL(condition_bid, condition_ask, level_bid, level_ask) - r * self._risk_function()
         return F
 
-    # a* = (Mk + s)/k
-    # b* = (Mk - s)/k
     # Ищет максимум для PnL
+    # В данном случае его можно найти аналитически:
+    # a* = (Mk + s)/k -- оптимальное a
+    # b* = (Mk - s)/k -- оптимальное b
     def func_max(self):
-        mid = np.array(self.state[TradingRobotEnv.STATE_MARKET_ASK]) - np.array(
-            self.state[TradingRobotEnv.STATE_MARKET_BID])
+        mid = np.array(self.state[MarketMake.STATE_MARKET_ASK]) - np.array(
+            self.state[MarketMake.STATE_MARKET_BID])
         k = np.array(self.COEFFICIENT_K)
         s = np.array(self.ORDER_SIZE)
         level_bid = mid - s / k
@@ -197,73 +196,69 @@ class TradingRobotEnv(gym.Env):
 
     # Оценивает действие
     def _eval_action(self, action):
-        condition_bid = action[TradingRobotEnv.ACTION_BID]
-        condition_ask = action[TradingRobotEnv.ACTION_ASK]
-        level_bid = action[TradingRobotEnv.ACTION_BID_LEVEL]
-        level_ask = action[TradingRobotEnv.ACTION_ASK_LEVEL]
+        condition_bid = action[MarketMake.ACTION_BID]
+        condition_ask = action[MarketMake.ACTION_ASK]
+        level_bid = action[MarketMake.ACTION_BID_LEVEL]
+        level_ask = action[MarketMake.ACTION_ASK_LEVEL]
 
         pnl = self._PnL(condition_bid, condition_ask, level_bid, level_ask)
         return pnl
 
     def step(self, action):
         self.last_action = action
-        past_worth = self.state[TradingRobotEnv.STATE_NET_WORTH]
+        past_worth = self.state[MarketMake.STATE_NET_WORTH]
 
-        our_usd, our_btc, done = Iterator.iterator()
+        condition_bid = action[MarketMake.ACTION_BID]
+        condition_ask = action[MarketMake.ACTION_ASK]
+        level_bid = action[MarketMake.ACTION_BID_LEVEL]
+        level_ask = action[MarketMake.ACTION_ASK_LEVEL]
 
-        self.state_log.append(self.state + [net_worth,
-                                            reward,
-                                            portfolio[0],
-                                            portfolio[1]])
-
-            self.step_num += 1
-
-        net_worth = self.calc_net_worth()
-
-        # Calculate actions
-        pnl = self.eval_action(action)
+        # итерируем по секунде
+        our_usd, our_btc, market_bid, market_ask, done = Iterator.iterator(condition_bid,
+                                                                           condition_ask,
+                                                                           level_bid,
+                                                                           level_ask
+                                                                           )
+        self.state[MarketMake.STATE_OUR_USD] = our_usd
+        self.state[MarketMake.STATE_OUR_BTC] = our_btc
+        self.state[MarketMake.STATE_MARKET_BID] = market_bid
+        self.state[MarketMake.STATE_MARKET_ASK = market_ask
 
         if self.verbose:
-            print(f"PnL: {pnl}")
+            print(f"PnL: {self._PnL(condition_bid, condition_ask, level_bid, level_ask)}")
 
-        # Time to retire
-        #         done = is_done
+        net_worth = self._calc_net_worth()
 
-        # bid [0]-level, [1]-size
-        if market_order[0] > 0:
-
-        # ask [2]-level, [3]-size
-        if
-
-        # Calculate profit
-        reward = net_worth - past_worth
+        # Calculate profit and reward
+        profit = net_worth - past_worth
+        # что-то не правильно с подсчетом награды
+        reward = self._objective_function(self, condition_bid, condition_ask, level_bid, level_ask)
 
         # Track progress
         if self.verbose:
             print(f"Networth: {net_worth}")
             print(f"*** End Step {self.step_num}: State={self.state}, \
           Reward={reward}")
-        self.state_log.append(self.state + [reward])
+
+        self.state_log.append(self.state + [reward, profit])
         self.step_num += 1
 
-        # Finish up
-        step_state = [x for x in self.state]
         return step_state, reward, done, {}
 
     def reset(self):
-        self.capital = TradingRobotEnv.STARTING_CAPITAL
+        self.capital = MarketMake.STARTING_CAPITAL
         self.step_num = 0
-        self.last_action = [0] * TradingRobotEnv.ACTION_ELEMENTS
-        self.state = [0] * TradingRobotEnv.STATE_ELEMENTS
+        self.last_action = [0] * MarketMake.ACTION_ELEMENTS
+        self.state = [0] * MarketMake.STATE_ELEMENTS
         self.state_log = []
 
-        self.state[TradingRobotEnv.STATE_PORTFOLIO] = [1, 2]
-        self.state[TradingRobotEnv.STATE_NET_WORTH] = []
-        self.state[TradingRobotEnv.STATE_MARKET_BID] = []
-        self.state[TradingRobotEnv.STATE_MARKET_ASK] = []
-        self.state[TradingRobotEnv.STATE_MARKET_ORDER] = []
-        self.state[TradingRobotEnv.STATE_PROFIT] = 0.0
-        self.state[TradingRobotEnv.STATE_PROFIT] = 0.0
+        self.state[MarketMake.STATE_PORTFOLIO] = [1, 2]
+        self.state[MarketMake.STATE_NET_WORTH] = []
+        self.state[MarketMake.STATE_MARKET_BID] = []
+        self.state[MarketMake.STATE_MARKET_ASK] = []
+        self.state[MarketMake.STATE_MARKET_ORDER] = []
+        self.state[MarketMake.STATE_PROFIT] = 0.0
+        self.state[MarketMake.STATE_PROFIT] = 0.0
 
         #         return np.array(self.state)
         return self.state
@@ -279,8 +274,8 @@ class TradingRobotEnv(gym.Env):
         y = 0
         _, height = d.textsize("W", font)
 
-        portfolio = self.state[TradingRobotEnv.STATE_PORTFOLIO]
-        worth = self.state[TradingRobotEnv.STATE_NET_WORTH]
+        portfolio = self.state[MarketMake.STATE_PORTFOLIO]
+        worth = self.state[MarketMake.STATE_NET_WORTH]
 
         net_worth = self.calc_net_worth()
 
