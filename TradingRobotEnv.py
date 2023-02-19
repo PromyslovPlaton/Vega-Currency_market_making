@@ -36,7 +36,7 @@ import PIL.ImageDraw
 import PIL.Image
 from PIL import ImageFont
 
-import Iterator
+import Data_instruments
 
 start_capital = 1e9 # стартовый капитал
 const_k = 0.7 # константа из функции вероятности исполнения, k > 0
